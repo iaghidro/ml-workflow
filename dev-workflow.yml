@@ -1,10 +1,28 @@
 Description: "Creates a developer workflow using a SageMaker notebook instance."
 
 Parameters:
-  
   EnvName:
     Type: String
     Description: Enter a unique name to namespace resources.
+
+  RepositoryUsername:
+    Type: String
+    Description: The user name for the default code repository.
+
+  RepositoryToken:
+    Type: String
+    NoEcho: true
+    Description: The secret token for the default code repository.
+
+  RepositoryUrl:
+    Type: String
+    Default: https://github.com/iaghidro/ml-workflow.git
+    Description: The default code repository url.
+
+  RepositoryBranch:
+    Type: String
+    Default: master
+    Description: The branch to check out initially for the default code repository.
 
   InstanceType:
     Type: String
@@ -13,7 +31,7 @@ Parameters:
       - ml.t3.xlarge
       - ml.p2.xlarge
       - ml.p3.2xlarge
-    Description: Enter ml.t3.xlarge, ml.p2.xlarge or ml.p3.2xlarge.
+    Description: Instance type for the Jupyter notebook. Enter ml.t3.xlarge, ml.p2.xlarge or ml.p3.2xlarge.
 
   VolumeSize:
     Type: Number
@@ -24,63 +42,70 @@ Parameters:
     Description: Enter the size of the EBS volume in GB.
 
 Resources:
+  MLWorkflowBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${EnvName}-ml-workflow"
+
   SageMakerIamRole:
     Type: "AWS::IAM::Role"
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          -
-            Effect: Allow
+          - Effect: Allow
             Principal:
               Service: sagemaker.amazonaws.com
             Action: sts:AssumeRole
       Path: "/"
       ManagedPolicyArns:
         - "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
-      
-  DevNbLifecycleConfig:
-    Type: "AWS::SageMaker::NotebookInstanceLifecycleConfig"
+        - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+      Policies:
+        - PolicyName: !Sub "${EnvName}-clouod-formation-execution-role"
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - "cloudformation:DescribeStacks"
+                  - "cloudformation:DescribeStackEvents"
+                  - "cloudformation:DescribeStackResource"
+                  - "cloudformation:DescribeStackResources"
+                  - "cloudformation:CreateStack"
+                Resource: "*"
+                Effect: Allow
+
+  RepositorySecret:
+    Type: AWS::SecretsManager::Secret
     Properties:
-      OnCreate:
-        - Content:
-            Fn::Base64: |
-              #!/bin/bash
-              sudo -H -i -u ec2-user bash << EOF
+      Description: Credentials to the git code repository
+      Name: !Sub ${EnvName}-repository-secret
+      SecretString: !Sub '{"username":"${RepositoryUsername}","password":"${RepositoryToken}"}'
 
-              echo "Clone repo"
-              git clone https://github.com/iaghidro/ml-workflow.git /home/ec2-user/SageMaker/dev-workflow
-
-              echo "Finished running onCreate script"
-              EOF
-                
-      OnStart:
-        - Content:
-            Fn::Base64: |
-              #!/bin/bash
-
-              sudo -H -i -u ec2-user bash << EOF
-              
-              echo "Install jupyter nbextension"
-              source /home/ec2-user/anaconda3/bin/activate JupyterSystemEnv
-              pip install jupyter_contrib_nbextensions
-              jupyter contrib nbextensions install --user
-
-              echo "Restarting jupyter notebook server"
-              pkill -f jupyter-notebook
-
-              echo "Getting latest version the git repo"
-              cd /home/ec2-user/SageMaker/dev-workflow
-              git pull
-
-              echo "Finished running onStart script"
-              EOF
+  DefaultCodeRepository:
+    Type: AWS::SageMaker::CodeRepository
+    Properties:
+      CodeRepositoryName: !Sub ${EnvName}-ml-workflow
+      GitConfig:
+        Branch: !Ref RepositoryBranch
+        RepositoryUrl: !Ref RepositoryUrl
+        SecretArn: !Ref RepositorySecret
 
   DevNotebookInstance:
     Type: "AWS::SageMaker::NotebookInstance"
     Properties:
       InstanceType: !Ref InstanceType
-      LifecycleConfigName: !GetAtt DevNbLifecycleConfig.NotebookInstanceLifecycleConfigName
       NotebookInstanceName: !Sub ${EnvName}-notebook
       RoleArn: !GetAtt SageMakerIamRole.Arn
       VolumeSizeInGB: !Ref VolumeSize
+      DefaultCodeRepository: !Sub ${EnvName}-ml-workflow
+
+Outputs:
+  MLWorkflowBucket:
+    Description: S3 Bucket used to store data for processing, and the generated models.
+    Value: !Ref MLWorkflowBucket
+  NotebookJupyterLab:
+    Description: The Jupyter notebook lab URL
+    Value: !Sub https://${EnvName}-notebook.notebook.us-west-2.sagemaker.aws/lab
+  DefaultCodeRepository:
+    Description: The code repository
+    Value: !Ref DefaultCodeRepository

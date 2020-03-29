@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Creates a machine learning pipeline with a model, and inference endpoint"
+
+Parameters:
+  EnvName:
+    Type: String
+    Description: Enter a unique name to namespace resources.
+
+  ModelName:
+    Description: Model name
+    Type: String
+
+  ModelDataUrl:
+    Description: Location of model artefact
+    Type: String
+
+  TrainingImage:
+    Description: The container used to train the model
+    Type: String
+
+  InstanceType:
+    Description: Instance type
+    Type: String
+    Default: ml.t2.xlarge
+
+  InstanceCount:
+    Description: Instance count
+    Type: String
+    Default: 1
+
+  RoleArn:
+    Description: Execution Role ARN
+    Type: String
+
+Resources:
+  Model:
+    Type: "AWS::SageMaker::Model"
+    Properties:
+      ModelName: !Sub "${EnvName}-${ModelName}"
+      Containers:
+        - Image: !Ref TrainingImage
+          ModelDataUrl: !Ref ModelDataUrl
+      ExecutionRoleArn: !Ref RoleArn
+
+  Endpoint:
+    Type: "AWS::SageMaker::Endpoint"
+    Properties:
+      EndpointName: !Sub "${EnvName}-${ModelName}-endpoint"
+      EndpointConfigName: !GetAtt EndpointConfig.EndpointConfigName
+      #Using a custom name will prevent updates with change sets
+      #EndpointName: !Ref EndpointName
+
+  EndpointConfig:
+    Type: "AWS::SageMaker::EndpointConfig"
+    Properties:
+      EndpointConfigName: !Sub "${EnvName}-${ModelName}-endpoint-config"
+      ProductionVariants:
+        - ModelName: !GetAtt Model.ModelName
+          VariantName: variant-1
+          InitialInstanceCount: !Ref InstanceCount
+          InstanceType: !Ref InstanceType
+          InitialVariantWeight: 1.0
+      #Using a custom name will prevent updates with change sets
+      #EndpointConfigName: !Ref EndpointConfigName
+
+Outputs:
+  EndpointId:
+    Value: !Ref Endpoint
+  EndpointName:
+    Value: !GetAtt Endpoint.EndpointName
